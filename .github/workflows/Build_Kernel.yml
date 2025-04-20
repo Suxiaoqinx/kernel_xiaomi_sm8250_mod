@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       target_device:
-        description: 'Target Device [目标设备,All暂不可用]'
+        description: '目标设备 (Target Device)'
         required: true
         default: 'umi'
         type: choice
@@ -28,7 +28,7 @@ on:
           - 'All'
 
       compiled_system:
-        description: 'Compiled System [适用系统,All暂不可用]'
+        description: '适用系统 (Compiled System)'
         required: true
         type: choice
         default: 'MIUI'
@@ -38,7 +38,7 @@ on:
           - 'All'
         
       kernelsu_variant:
-        description: 'KernelSU Variant [KernelSU 变体]'
+        description: 'KernelSU 变体 (KernelSU Variant)'
         required: true
         type: choice
         default: 'SukiSU-Ultra'
@@ -49,7 +49,7 @@ on:
           - 'None'
 
       build_type:
-        description: 'Build Type [内核构建类型]'
+        description: '内核构建类型 (Build Type)'
         required: true
         type: choice
         default: 'Release'
@@ -67,8 +67,9 @@ jobs:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
+      KERNEL_ROOT: "/home/runner/work/kernel_xiaomi_sm8250_mod/kernel_xiaomi_sm8250_mod"
     steps:
-      - name: Maximize build space
+      - name: 最大化构建空间
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 8192
@@ -79,21 +80,11 @@ jobs:
           remove-haskell: "true"
           remove-codeql: "true"
           
-      - name: Setting the CONFIG environment variable
-        run: |
-          # Set CONFIG dynamically based on inputs values
-          CONFIG="/home/runner/work/kernel_xiaomi_sm8250_mod/kernel_xiaomi_sm8250_mod"
-
-          # Set CONFIG as an environment variable for future steps
-          echo "CONFIG=$CONFIG" >> $GITHUB_ENV
-
-          echo "CONFIG set to: $CONFIG"
-          
-      - name: Clone Kernel Source
+      - name: 克隆内核源码
         run: |
           git clone https://github.com/yspbwx2010/kernel_xiaomi_sm8250_mod.git --depth=1 kernel_platform
-
-      - name: Install Dependencies
+          
+      - name: 安装依赖
         run: |
           sudo apt update
           sudo apt install -y \
@@ -101,107 +92,117 @@ jobs:
             git libelf-dev libssl-dev make ninja-build python3-dev texinfo u-boot-tools xz-utils \
             zlib1g-dev libncurses-dev wget zip cpio python3 python3-pip tree gcc clang lld llvm
 
-      - name: Configuring ccache
+      - name: 配置 ccache
         run: |
-          mkdir -p ~/.cache
+          mkdir -p ~/.cache/ccache
           ccache --version
           ccache --max-size=2G
           ccache --set-config=compression=true
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$HOME/.cache/ccache" >> $GITHUB_ENV
           
-      - name: Restore ccache from cache
+      - name: 从缓存恢复 ccache
         uses: actions/cache@v4
         with:
-          path: ~/.ccache
-          key: ccache
+          path: ~/.cache/ccache
+          key: ccache-${{ github.event.inputs.target_device }}-${{ github.event.inputs.compiled_system }}
           restore-keys: |
-            ccache
+            ccache-${{ github.event.inputs.target_device }}-
+            ccache-
 
-      - name: Caching toolchain
+      - name: 创建工具链目录
+        run: |
+          mkdir -p "$KERNEL_ROOT/kernel_platform/toolchain/clang"
+            
+      - name: 缓存工具链
         id: cache-toolchain
         uses: actions/cache@v4
         with:
-          path: |
-            $CONFIG/kernel_platform/toolchain/clang
-          key: toolchain
+          path: ${{ env.KERNEL_ROOT }}/kernel_platform/toolchain
+          key: toolchain-clang-r547379-gcc
           restore-keys: toolchain
             
-      - name: Download Google Clang Toolchain
+      - name: 下载 Google Clang 工具链
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          mkdir -p $CONFIG/kernel_platform/toolchain/clang
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz > /dev/null 2>&1
-          tar -xzvf clang-r547379.tar.gz
+          cd "$KERNEL_ROOT/kernel_platform"
+          mkdir -p toolchain/clang
+          cd toolchain/clang
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O clang-r547379.tar.gz
+          tar -xzf clang-r547379.tar.gz
           rm clang-r547379.tar.gz
 
-      - name: Sync LineageOS GCC Toolchain
+      - name: 同步 LineageOS GCC 工具链
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          cd $CONFIG/kernel_platform
+          cd "$KERNEL_ROOT/kernel_platform"
           git submodule update --init --remote toolchain/gcc/gcc64
           git submodule update --init --remote toolchain/gcc/gcc32
-          
-      - name: Setting the CONFIG environment variable
-        run: |
-          # Set CONFIG dynamically based on inputs values
-          CONFIG="/home/runner/work/kernel_xiaomi_sm8250_mod/kernel_xiaomi_sm8250_mod"
-          # Set CONFIG as an environment variable for future steps
-          echo "CONFIG=$CONFIG" >> $GITHUB_ENV
 
-          echo "CONFIG set to: $CONFIG"
-
-      - name: Setup KernelSU
+      - name: 配置 KernelSU
         run: |
-          cd "$CONFIG/kernel_platform"
+          cd "$KERNEL_ROOT/kernel_platform"
 
           KSU_VARIANT="${{ github.event.inputs.kernelsu_variant }}"
 
           if [ "$KSU_VARIANT" == "SukiSU-Ultra" ]; then
-            echo "KernelSU Enabled: $KSU_VARIANT"
+            echo "配置 KernelSU 变体: $KSU_VARIANT"
             curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/susfs-dev/kernel/setup.sh" | bash -s susfs-dev
           elif [ "$KSU_VARIANT" == "RKSU" ]; then
-            echo "KernelSU Enabled: $KSU_VARIANT"
+            echo "配置 KernelSU 变体: $KSU_VARIANT"
             curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/susfs-v1.5.5/kernel/setup.sh" | bash -s susfs-v1.5.5
           elif [ "$KSU_VARIANT" == "KernelSU" ]; then
-            echo "KernelSU Enabled: $KSU_VARIANT"
+            echo "配置 KernelSU 变体: $KSU_VARIANT"
             curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s v0.9.5
           else
-            echo "KernelSU is disabled"
+            echo "KernelSU 已禁用"
           fi
           
-      - name: Build Kernel
+      - name: 构建内核
         run: |
-          cd "$CONFIG/kernel_platform"
+          cd "$KERNEL_ROOT/kernel_platform"
 
-          CLANG_PATH=$(pwd)/toolchain/clang/bin
-          GCC64_PATH=$(pwd)/toolchain/gcc/gcc64/bin
-          GCC32_PATH=$(pwd)/toolchain/gcc/gcc32/bin
-
-          #export PATH=$GCC32_PATH:$PATH
-          #export PATH=$GCC64_PATH:$PATH
-          #export PATH=$CLANG_PATH:$PATH
-
+          # 设置环境变量
+          export CCACHE=1
+          export PATH="/usr/bin:$PATH"
+          
           DEVICE="${{ github.event.inputs.target_device }}"
           SYSTEM="${{ github.event.inputs.compiled_system }}"
           KSU="${{ github.event.inputs.kernelsu_variant }}"
-
-          export PATH="/usr/bin:$PATH"
-          export CCACHE=1
-          MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=./toolchain/gcc/gcc64/aarch64-linux-android- CROSS_COMPILE_COMPAT=./toolchain/gcc/gcc32/arm-linux-androideabi- CROSS_COMPILE_ARM32=./toolchain/gcc/gcc32/arm-linux-androideabi- CLANG_TRIPLE=aarch64-linux-gnu- CC=clang CXX=clang++ HOSTCC=clang HOSTCXX=clang++ LD=ld.lld HOSTLD=ld.lld KCFLAGS=-Wno-error O=out"
-
+          
+          # 检查不支持的选项
           if [ "$DEVICE" == "All" ]; then
-              echo "Sorry,but build for All devices is not support now"
+              echo "抱歉，目前不支持为所有设备构建"
+              exit 1
+          fi
+          
+          if [ "$SYSTEM" == "All" ]; then
+              echo "抱歉，目前不支持为所有系统构建"
               exit 1
           fi
 
+          # 设置构建参数
+          MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=./toolchain/gcc/gcc64/aarch64-linux-android- \
+            CROSS_COMPILE_COMPAT=./toolchain/gcc/gcc32/arm-linux-androideabi- \
+            CROSS_COMPILE_ARM32=./toolchain/gcc/gcc32/arm-linux-androideabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CC=clang CXX=clang++ HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld HOSTLD=ld.lld \
+            KCFLAGS=-Wno-error \
+            O=out"
+
+          # 生成设备配置
+          echo "正在生成 ${DEVICE} 的配置..."
           make $MAKE_ARGS -j$(nproc --all) ${DEVICE}_defconfig
 
+          # 根据系统类型修改配置
           if [ "$SYSTEM" == "MIUI" ]; then
+              echo "应用 MIUI 特定配置..."
               scripts/config --file out/.config \
                   --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
-                  -e PERF_CRITICAL_RT_TASK	\
-                  -e SF_BINDER		\
-                  -e OVERLAY_FS		\
+                  -e PERF_CRITICAL_RT_TASK \
+                  -e SF_BINDER \
+                  -e OVERLAY_FS \
                   -d DEBUG_FS \
                   -e MIGT \
                   -e MIGT_ENERGY_MODEL \
@@ -225,12 +226,11 @@ jobs:
                   -e BOOTUP_RECLAIM \
                   -e MI_RECLAIM \
                   -e RTMM
-          elif [ "$SYSTEM" == "All" ]; then
-              echo "Sorry,but build for All system is not support now"
-              exit 1
           fi
 
+          # 根据 KernelSU 变体修改配置
           if [ "$KSU" == "SukiSU-Ultra" ]; then
+              echo "应用 SukiSU-Ultra 配置..."
               scripts/config --file out/.config \
                   -e KSU \
                   -e KPM \
@@ -251,6 +251,7 @@ jobs:
                   -e KSU_SUSFS_OPEN_REDIRECT \
                   -d KSU_SUSFS_SUS_SU
           elif [ "$KSU" == "RKSU" ]; then
+              echo "应用 RKSU 配置..."
               scripts/config --file out/.config \
                   -e KSU \
                   -e KSU_SUSFS \
@@ -270,59 +271,81 @@ jobs:
                   -e KSU_SUSFS_OPEN_REDIRECT \
                   -d KSU_SUSFS_SUS_SU
           elif [ "$KSU" == "KernelSU" ]; then
+              echo "应用 KernelSU 配置..."
               scripts/config --file out/.config -e KSU
           fi
 
+          # 开始构建
+          echo "开始构建内核..."
           make $MAKE_ARGS -j$(nproc --all)
 
-          if [ -f "$CONFIG/kernel_platform/out/arch/arm64/boot/Image" ]; then
-              echo "Build successfully"
+          # 验证构建结果
+          if [ -f "$KERNEL_ROOT/kernel_platform/out/arch/arm64/boot/Image" ]; then
+              echo "✅ 构建成功"
           else
-              echo "Image file not found,Build failed"
+              echo "❌ 找不到 Image 文件，构建失败"
               exit 1
           fi
+          
+          # 显示 ccache 统计信息
           ccache --show-stats
 
-      - name: KPM patching of Image files
+      - name: KPM 修补 Image 文件
         run: |
           KSU_VARIANT="${{ github.event.inputs.kernelsu_variant }}"
           
-          if [ $KSU_VARIANT == "SukiSU-Ultra" ]; then
-            echo "Patching Image file..."
-            cd "$CONFIG/kernel_platform/out/arch/arm64/boot"
+          if [ "$KSU_VARIANT" == "SukiSU-Ultra" ]; then
+            echo "正在修补 Image 文件..."
+            cd "$KERNEL_ROOT/kernel_platform/out/arch/arm64/boot"
             curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch
             chmod 777 patch
             ./patch
             rm -rf Image
             mv oImage Image
+            echo "✅ Image 文件修补完成"
           fi
 
-
-      - name: Compress the kernel to AnyKernel3
+      - name: 打包内核到 AnyKernel3
         run: |
-          cd "$CONFIG/kernel_platform"
-          mkdir -p out_ak3
-          cd out_ak3
-          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1 AnyKernel3
-          rm -rf ./AnyKernel3/.git
-          rm -rf ./AnyKernel3/.github
-          cp "$CONFIG/kernel_platform/out/arch/arm64/boot/Image" ./AnyKernel3
-          zip -r ${{ github.event.inputs.target_device }}_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ github.run_id }}.zip ./AnyKernel3/*
+          # 定义变量
+          DEVICE="${{ github.event.inputs.target_device }}"
+          SYSTEM="${{ github.event.inputs.compiled_system }}"
+          KSU="${{ github.event.inputs.kernelsu_variant }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          BUILD_ID="${{ github.run_id }}"
+          ZIP_NAME="${DEVICE}_${KSU}_${SYSTEM}_${BUILD_TYPE}_${BUILD_ID}.zip"
+          
+          # 创建目录并克隆 AnyKernel3
+          mkdir -p "$KERNEL_ROOT/ak3_out"
+          cd "$KERNEL_ROOT/ak3_out"
+          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
+          cd AnyKernel3
+          
+          # 删除不需要的文件
+          rm -rf .git .github
+          
+          # 复制内核镜像
+          cp "$KERNEL_ROOT/kernel_platform/out/arch/arm64/boot/Image" ./
+          
+          # 打包
+          echo "正在创建刷机包: $ZIP_NAME"
+          cd ..
+          zip -r "$ZIP_NAME" AnyKernel3
 
-      - name: Uploading compiled assets
+      - name: 上传编译结果
         uses: actions/upload-artifact@v4
         with:
-          name: kernel
+          name: ${{ github.event.inputs.target_device }}_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ github.event.inputs.build_type }}
           path: |
-            "$CONFIG/kernel_platform/out_ak3/*.zip"
-            "$CONFIG/kernel_platform/out/arch/arm64/boot/Image"
+            ${{ env.KERNEL_ROOT }}/ak3_out/*.zip
+            ${{ env.KERNEL_ROOT }}/kernel_platform/out/arch/arm64/boot/Image
       
-      - name: Upload to Release
+      - name: 发布到 Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            "$CONFIG/kernel_platform/out_ak3/*.zip"
-            "$CONFIG/kernel_platform/out/arch/arm64/boot/Image"
+            ${{ env.KERNEL_ROOT }}/ak3_out/*.zip
+            ${{ env.KERNEL_ROOT }}/kernel_platform/out/arch/arm64/boot/Image
           name: Kernel_${{ github.event.inputs.target_device }}_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ github.run_id }}
           tag_name: Kernel_${{ github.event.inputs.target_device }}_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ github.run_id }}
           body: |
